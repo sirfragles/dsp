@@ -19,6 +19,7 @@
 #include "hilbert.h"
 #include "decorrelate.h"
 #include "noise.h"
+#include "virtual_bass.h"
 #include "ladspa_host.h"
 #include "stats.h"
 
@@ -64,6 +65,7 @@ static struct effect_info effects[] = {
 #ifdef ENABLE_LADSPA_HOST
 	{ "ladspa_host",        "ladspa_host module_path plugin_label [control ...]", ladspa_host_effect_init, 0 },
 #endif
+	{ "virtual_bass",       "virtual_bass cutoff [level]",             virtual_bass_effect_init, 0 },
 	{ "stats",              "stats [ref_level]",                       stats_effect_init,     0 },
 };
 

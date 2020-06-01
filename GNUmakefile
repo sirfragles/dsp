@@ -16,6 +16,7 @@ DSP_OBJ := dsp.o \
 	delay.o \
 	decorrelate.o \
 	noise.o \
+	virtual_bass.o \
 	stats.o \
 	null.o \
 	sgen.o \
@@ -33,6 +34,7 @@ LADSPA_DSP_OBJ := ladspa_dsp.o \
 	delay.o \
 	decorrelate.o \
 	noise.o \
+	virtual_bass.o \
 	stats.o
 LADSPA_DSP_CPP_OBJ :=
 
