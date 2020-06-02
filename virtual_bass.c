@@ -97,10 +97,10 @@ struct effect * virtual_bass_effect_init(struct effect_info *ei, struct stream_i
 			state[i] = calloc(1, sizeof(struct virtual_bass_state));
 			state[i]->level = level;
 			state[i]->time_const = pow(0.5, MAXIMUM(cutoff / 100.0, 1.0) / istream->fs);
-			biquad_init_using_type(&state[i]->lp[0], BIQUAD_LOWPASS,    istream->fs, cutoff, 0.5,    0.0, 0.0, BIQUAD_WIDTH_Q);
-			biquad_init_using_type(&state[i]->lp[1], BIQUAD_LOWPASS,    istream->fs, cutoff, 1.0,    0.0, 0.0, BIQUAD_WIDTH_Q);
-			biquad_init_using_type(&state[i]->hp[0], BIQUAD_HIGHPASS_1, istream->fs, 20.0,   0.0,    0.0, 0.0, BIQUAD_WIDTH_Q);
-			biquad_init_using_type(&state[i]->hp[1], BIQUAD_HIGHPASS,   istream->fs, 20.0,   0.7071, 0.0, 0.0, BIQUAD_WIDTH_Q);
+			biquad_init_using_type(&state[i]->lp[0], BIQUAD_LOWPASS,    istream->fs, cutoff, 0.54119610, 0.0, 0.0, BIQUAD_WIDTH_Q);
+			biquad_init_using_type(&state[i]->lp[1], BIQUAD_LOWPASS,    istream->fs, cutoff, 1.30656296, 0.0, 0.0, BIQUAD_WIDTH_Q);
+			biquad_init_using_type(&state[i]->hp[0], BIQUAD_HIGHPASS_1, istream->fs, 20.0,   0.0,        0.0, 0.0, BIQUAD_WIDTH_Q);
+			biquad_init_using_type(&state[i]->hp[1], BIQUAD_HIGHPASS,   istream->fs, 20.0,   0.7071,     0.0, 0.0, BIQUAD_WIDTH_Q);
 		}
 	}
 	e->data = state;
