@@ -10,7 +10,7 @@ struct virtual_bass_state {
 	struct biquad_state hp[2];
 };
 
-static inline sample_t harmonic_func(sample_t s, sample_t e, sample_t l)
+static __inline__ sample_t harmonic_func(sample_t s, sample_t e, sample_t l)
 {
 	e = (e > 0.0) ? MINIMUM(1.0/e, 1000.0) : 1000.0;
 	sample_t e2 = e*e; sample_t e3 = e2*e;
