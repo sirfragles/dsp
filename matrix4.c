@@ -61,6 +61,7 @@ struct matrix4_state {
 	sample_t *fb_buf[2][6];
 	sample_t norm_mult, surr_mult;
 	struct ewma_state band_d_sum_pwr_env[6];
+	struct biquad_state band0_hp;  /* for computing band0 weight for directional boost */
 	ssize_t len, p, drain_frames;
 	ssize_t ev_sample_frames, ev_max_hold_frames, ev_min_hold_frames;
 };
@@ -405,9 +406,10 @@ sample_t * matrix4_effect_run(struct effect *e, ssize_t *frames, sample_t *ibuf,
 				const int b = (k == 3) ? 5 : 0;
 				const double eb_s0_d_bp = state->fb_buf[0][b][state->p];
 				const double eb_s1_d_bp = state->fb_buf[1][b][state->p];
+				const double eb_sum_d_bp = (b == 0) ? biquad(&state->band0_hp, eb_s0_d_bp+eb_s1_d_bp) : eb_s0_d_bp+eb_s1_d_bp;
 				out_ls += (eb_s0_d_bp*lsl_m + eb_s1_d_bp*lsr_m) * norm_mult * surr_mult;
 				out_rs += (eb_s0_d_bp*rsl_m + eb_s1_d_bp*rsr_m) * norm_mult * surr_mult;
-				const double eb_d_sum_pwr_env = ewma_run(&state->band_d_sum_pwr_env[b], (eb_s0_d_bp+eb_s1_d_bp)*(eb_s0_d_bp+eb_s1_d_bp));
+				const double eb_d_sum_pwr_env = ewma_run(&state->band_d_sum_pwr_env[b], eb_sum_d_bp*eb_sum_d_bp);
 				fl_boost += band->fl_boost * band->fl_boost * eb_d_sum_pwr_env;
 				fr_boost += band->fr_boost * band->fr_boost * eb_d_sum_pwr_env;
 				f_boost_norm += eb_d_sum_pwr_env;
@@ -639,6 +641,7 @@ struct effect * matrix4_effect_init(struct effect_info *ei, struct stream_info *
 	}
 	for (k = 0; k < 6; ++k)
 		ewma_init(&state->band_d_sum_pwr_env[k], istream->fs, TIME_TO_FREQ(RISE_TIME_FAST));
+	biquad_init_using_type(&state->band0_hp, BIQUAD_HIGHPASS, istream->fs, 38.0, 0.5, 0, 0, BIQUAD_WIDTH_Q);
 
 	state->len = lround(TIME_TO_FRAMES(RISE_TIME_FAST + EVENT_SAMPLE_TIME, istream->fs));
 	state->bufs = calloc(istream->channels, sizeof(sample_t *));
