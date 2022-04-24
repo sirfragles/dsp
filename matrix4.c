@@ -60,6 +60,7 @@ struct matrix4_state {
 	sample_t **bufs;
 	sample_t *fb_buf[2][6];
 	sample_t norm_mult, surr_mult;
+	struct ewma_state band_d_sum_pwr_env[6];
 	ssize_t len, p, drain_frames;
 	ssize_t ev_sample_frames, ev_max_hold_frames, ev_min_hold_frames;
 };
@@ -173,13 +174,14 @@ static void filter_bank_run(struct filter_bank *fb, sample_t s)
 sample_t * matrix4_effect_run(struct effect *e, ssize_t *frames, sample_t *ibuf, sample_t *obuf)
 {
 	ssize_t i, k, oframes = 0;
+	double fl_boost = 0, fr_boost = 0;
 	struct matrix4_state *state = (struct matrix4_state *) e->data;
 
 	const double norm_mult = (state->disable) ? 1.0 : state->norm_mult;
 	const double surr_mult = (state->disable) ? 0.0 : state->surr_mult;
 
 	for (i = 0; i < *frames; ++i) {
-		double fl_boost = 0, fr_boost = 0;
+		double f_boost_norm = 0;
 		sample_t out_ls = 0, out_rs = 0;
 
 		const double s0 = (ibuf) ? ibuf[i*e->istream.channels + state->c0] : 0.0;
@@ -190,6 +192,8 @@ sample_t * matrix4_effect_run(struct effect *e, ssize_t *frames, sample_t *ibuf,
 
 		filter_bank_run(&state->fb[0], s0);
 		filter_bank_run(&state->fb[1], s1);
+
+		fl_boost = fr_boost = 0;
 
 		for (k = 0; k < 4; ++k) {
 			struct matrix4_band *band = &state->band[k];
@@ -332,8 +336,10 @@ sample_t * matrix4_effect_run(struct effect *e, ssize_t *frames, sample_t *ibuf,
 				band->fl_boost = 0.0;
 				band->fr_boost = 0.0;
 			}
-			fl_boost += band->fl_boost * band->fl_boost;
-			fr_boost += band->fr_boost * band->fr_boost;
+			const double d_sum_pwr_env = ewma_run(&state->band_d_sum_pwr_env[k+1], (s0_d_bp+s1_d_bp)*(s0_d_bp+s1_d_bp));
+			fl_boost += band->fl_boost * band->fl_boost * d_sum_pwr_env;
+			fr_boost += band->fr_boost * band->fr_boost * d_sum_pwr_env;
+			f_boost_norm += d_sum_pwr_env;
 
 			/* The matrix coefficients for the surround channels are from
 			   "Multichannel matrix surround decoders for two-eared listeners" by
@@ -395,19 +401,16 @@ sample_t * matrix4_effect_run(struct effect *e, ssize_t *frames, sample_t *ibuf,
 			out_ls += (s0_d_bp*lsl_m + s1_d_bp*lsr_m) * norm_mult * surr_mult;
 			out_rs += (s0_d_bp*rsl_m + s1_d_bp*rsr_m) * norm_mult * surr_mult;
 
-			if (k == 0) {
-				const double b0_s0_d_bp = state->fb_buf[0][0][state->p];
-				const double b0_s1_d_bp = state->fb_buf[1][0][state->p];
-				out_ls += (b0_s0_d_bp*lsl_m + b0_s1_d_bp*lsr_m) * norm_mult * surr_mult;
-				out_rs += (b0_s0_d_bp*rsl_m + b0_s1_d_bp*rsr_m) * norm_mult * surr_mult;
-				fl_boost += band->fl_boost * band->fl_boost;
-				fr_boost += band->fr_boost * band->fr_boost;
-			}
-			else if (k == 3) {
-				const double b5_s0_d_bp = state->fb_buf[0][5][state->p];
-				const double b5_s1_d_bp = state->fb_buf[1][5][state->p];
-				out_ls += (b5_s0_d_bp*lsl_m + b5_s1_d_bp*lsr_m) * norm_mult * surr_mult;
-				out_rs += (b5_s0_d_bp*rsl_m + b5_s1_d_bp*rsr_m) * norm_mult * surr_mult;
+			if (k == 0 || k == 3) {
+				const int b = (k == 3) ? 5 : 0;
+				const double eb_s0_d_bp = state->fb_buf[0][b][state->p];
+				const double eb_s1_d_bp = state->fb_buf[1][b][state->p];
+				out_ls += (eb_s0_d_bp*lsl_m + eb_s1_d_bp*lsr_m) * norm_mult * surr_mult;
+				out_rs += (eb_s0_d_bp*rsl_m + eb_s1_d_bp*rsr_m) * norm_mult * surr_mult;
+				const double eb_d_sum_pwr_env = ewma_run(&state->band_d_sum_pwr_env[b], (eb_s0_d_bp+eb_s1_d_bp)*(eb_s0_d_bp+eb_s1_d_bp));
+				fl_boost += band->fl_boost * band->fl_boost * eb_d_sum_pwr_env;
+				fr_boost += band->fr_boost * band->fr_boost * eb_d_sum_pwr_env;
+				f_boost_norm += eb_d_sum_pwr_env;
 			}
 
 			band->lr = lr;
@@ -416,9 +419,15 @@ sample_t * matrix4_effect_run(struct effect *e, ssize_t *frames, sample_t *ibuf,
 			band->cs_adapt = cs_adapt;
 		}
 
-		/* FIXME: RMS average of all bands except for band 5... maybe not the best idea? */
-		fl_boost = sqrt(fl_boost / 5.0);
-		fr_boost = sqrt(fr_boost / 5.0);
+		/* FIXME: Weighted RMS average based on power envelope... maybe there's a better way? */
+		if (f_boost_norm > 0.0) {
+			fl_boost = sqrt(fl_boost / f_boost_norm);
+			fr_boost = sqrt(fr_boost / f_boost_norm);
+		}
+		else {
+			fl_boost = 0.0;
+			fr_boost = 0.0;
+		}
 
 		sample_t ll_m, lr_m, rl_m, rr_m;
 		ll_m = 1.0 + fl_boost;
@@ -474,7 +483,9 @@ sample_t * matrix4_effect_run(struct effect *e, ssize_t *frames, sample_t *ibuf,
 					TO_DEGREES(state->band[i].lr), TO_DEGREES(state->band[i].lr_adapt), TO_DEGREES(state->band[i].cs), TO_DEGREES(state->band[i].cs_adapt),
 					state->band[i].fl_boost, state->band[i].fr_boost, state->band[i].ord_count, state->band[i].diff_count, state->band[i].early_count);
 			}
-			fprintf(stderr, "\033[4A");
+			fprintf(stderr, "\n%s%s: weighted RMS dir_boost: l:%05.2f r:%05.2f\033[K\r",
+				e->name, (state->disable) ? " [off]" : "", fl_boost, fr_boost);
+			fprintf(stderr, "\033[5A");
 		}
 	#endif
 
@@ -537,7 +548,10 @@ void matrix4_effect_destroy(struct effect *e)
 		free(state->bufs[i]);
 	free(state->bufs);
 	#ifndef LADSPA_FRONTEND
-		if (state->show_status) fprintf(stderr, "\033[K\n\033[K\n\033[K\n\033[K\n\033[K\r\033[4A");
+		if (state->show_status) {
+			for (i = 0; i < 5; ++i) fprintf(stderr, "\033[K\n");
+			fprintf(stderr, "\033[K\r\033[%dA", i);
+		}
 	#endif
 	free(state);
 }
@@ -623,6 +637,8 @@ struct effect * matrix4_effect_init(struct effect_info *ei, struct stream_info *
 		for (i = 0; i < 2; ++i) ewma_init(&state->band[k].drift[i], istream->fs, TIME_TO_FREQ(ADAPT_TIME));
 		for (i = 2; i < 4; ++i) ewma_init(&state->band[k].drift[i], istream->fs, TIME_TO_FREQ(RISE_TIME_FAST));
 	}
+	for (k = 0; k < 6; ++k)
+		ewma_init(&state->band_d_sum_pwr_env[k], istream->fs, TIME_TO_FREQ(RISE_TIME_FAST));
 
 	state->len = lround(TIME_TO_FRAMES(RISE_TIME_FAST + EVENT_SAMPLE_TIME, istream->fs));
 	state->bufs = calloc(istream->channels, sizeof(sample_t *));
