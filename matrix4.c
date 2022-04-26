@@ -73,7 +73,7 @@ struct matrix4_band {
 struct matrix4_state {
 	int c0, c1, has_output, is_draining, disable, show_status, do_dir_boost;
 	struct filter_bank fb[2];
-	struct matrix4_band band[4];
+	struct matrix4_band band[5];
 	sample_t **bufs;
 	sample_t *fb_buf[2][6];
 	sample_t norm_mult, surr_mult;
@@ -250,7 +250,7 @@ sample_t * matrix4_effect_run(struct effect *e, ssize_t *frames, sample_t *ibuf,
 
 		fl_boost = fr_boost = 0;
 
-		for (k = 0; k < 4; ++k) {
+		for (k = 0; k < 5; ++k) {
 			struct matrix4_band *band = &state->band[k];
 			double lr, cs, lr_adapt, cs_adapt;
 
@@ -456,14 +456,13 @@ sample_t * matrix4_effect_run(struct effect *e, ssize_t *frames, sample_t *ibuf,
 			out_ls += (s0_d_bp*lsl_m + s1_d_bp*lsr_m) * norm_mult * surr_mult;
 			out_rs += (s0_d_bp*rsl_m + s1_d_bp*rsr_m) * norm_mult * surr_mult;
 
-			if (k == 0 || k == 3) {
-				const int b = (k == 3) ? 5 : 0;
-				const double eb_s0_d_bp = state->fb_buf[0][b][state->p];
-				const double eb_s1_d_bp = state->fb_buf[1][b][state->p];
-				const double eb_sum_d_bp = (b == 0) ? biquad(&state->band0_hp, eb_s0_d_bp+eb_s1_d_bp) : eb_s0_d_bp+eb_s1_d_bp;
+			if (k == 0) {
+				const double eb_s0_d_bp = state->fb_buf[0][0][state->p];
+				const double eb_s1_d_bp = state->fb_buf[1][0][state->p];
+				const double eb_sum_d_bp = biquad(&state->band0_hp, eb_s0_d_bp+eb_s1_d_bp);
 				out_ls += (eb_s0_d_bp*lsl_m + eb_s1_d_bp*lsr_m) * norm_mult * surr_mult;
 				out_rs += (eb_s0_d_bp*rsl_m + eb_s1_d_bp*rsr_m) * norm_mult * surr_mult;
-				const double eb_d_sum_pwr_env = ewma_run(&state->band_d_sum_pwr_env[b], eb_sum_d_bp*eb_sum_d_bp);
+				const double eb_d_sum_pwr_env = ewma_run(&state->band_d_sum_pwr_env[0], eb_sum_d_bp*eb_sum_d_bp);
 				fl_boost += band->fl_boost * band->fl_boost * eb_d_sum_pwr_env;
 				fr_boost += band->fr_boost * band->fr_boost * eb_d_sum_pwr_env;
 				f_boost_norm += eb_d_sum_pwr_env;
@@ -533,7 +532,7 @@ sample_t * matrix4_effect_run(struct effect *e, ssize_t *frames, sample_t *ibuf,
 	#ifndef LADSPA_FRONTEND
 		/* TODO: Implement a proper way for effects to show status lines. */
 		if (state->show_status) {
-			for (i = 0; i < 4; ++i) {
+			for (i = 0; i < 5; ++i) {
 				fprintf(stderr, "\n%s%s: band %zd: lr: %+06.2f (%+06.2f); cs: %+06.2f (%+06.2f); dir_boost: l:%05.2f r:%05.2f; ord: %zd; diff: %zd; early: %zd\033[K\r",
 					e->name, (state->disable) ? " [off]" : "", i,
 					TO_DEGREES(state->band[i].lr), TO_DEGREES(state->band[i].lr_adapt), TO_DEGREES(state->band[i].cs), TO_DEGREES(state->band[i].cs_adapt),
@@ -541,7 +540,7 @@ sample_t * matrix4_effect_run(struct effect *e, ssize_t *frames, sample_t *ibuf,
 			}
 			fprintf(stderr, "\n%s%s: weighted RMS dir_boost: l:%05.2f r:%05.2f\033[K\r",
 				e->name, (state->disable) ? " [off]" : "", fl_boost, fr_boost);
-			fprintf(stderr, "\033[5A");
+			fprintf(stderr, "\033[%zdA", i+1);
 		}
 	#endif
 
@@ -605,7 +604,7 @@ void matrix4_effect_destroy(struct effect *e)
 	free(state->bufs);
 	#ifndef LADSPA_FRONTEND
 		if (state->show_status) {
-			for (i = 0; i < 5; ++i) fprintf(stderr, "\033[K\n");
+			for (i = 0; i < 6; ++i) fprintf(stderr, "\033[K\n");
 			fprintf(stderr, "\033[K\r\033[%dA", i);
 		}
 	#endif
@@ -683,7 +682,7 @@ struct effect * matrix4_effect_init(struct effect_info *ei, struct stream_info *
 	}
 	filter_bank_init(&state->fb[0], istream->fs);
 	filter_bank_init(&state->fb[1], istream->fs);
-	for (k = 0; k < 4; ++k) {
+	for (k = 0; k < 5; ++k) {
 		for (i = 0; i < 4; ++i) ewma_init(&state->band[k].r_fast[i], istream->fs, TIME_TO_FREQ(RISE_TIME_FAST));
 		for (i = 0; i < 2; ++i) ewma_init(&state->band[k].r_slow[i], istream->fs, TIME_TO_FREQ(RISE_TIME_SLOW));
 		for (i = 0; i < 4; ++i) ewma_init(&state->band[k].adapt[i], istream->fs, TIME_TO_FREQ(ADAPT_TIME));
