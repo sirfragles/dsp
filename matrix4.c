@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <complex.h>
 #include <math.h>
 #include "matrix4.h"
 #include "biquad.h"
@@ -34,13 +35,29 @@ enum {
 	EVENT_FLAG_END = 1<<4,
 };
 
-struct band_div {
-	struct biquad_state lp[2], hp[2];
+struct ap1_state {
+	sample_t c0;
+	sample_t i0, o0;
+};
+
+struct ap2_state {
+	sample_t c0, c1;
+	sample_t i0, i1, o0, o1;
+};
+
+struct ap3_state {
+	struct ap2_state ap2;
+	struct ap1_state ap1;
+};
+
+struct cap5_state {
+	struct ap2_state a1;
+	struct ap3_state a2;
 };
 
 struct filter_bank {
-	struct band_div b[5];
-	struct biquad_state ap[6];
+	struct cap5_state b[5];
+	struct ap2_state ap[6];
 	sample_t s[6];
 };
 
@@ -101,13 +118,73 @@ static double ewma_get_last(struct ewma_state *state)
 	return state->m0;
 }
 
-static void band_div_init(struct band_div *b, double fs, double f0)
+static sample_t ap1_run(struct ap1_state *state, sample_t s)
+{
+	sample_t r = state->c0 * (s - state->o0)
+		+ state->i0;
+
+	state->i0 = s;
+	state->o0 = r;
+
+	return r;
+}
+
+static sample_t ap2_run(struct ap2_state *state, sample_t s)
+{
+	sample_t r = state->c1 * (s - state->o1)
+		+ state->c0 * (state->i0 - state->o0)
+		+ state->i1;
+
+	state->i1 = state->i0;
+	state->i0 = s;
+
+	state->o1 = state->o0;
+	state->o0 = r;
+
+	return r;
+}
+
+static sample_t ap3_run(struct ap3_state *state, sample_t s)
+{
+	return ap1_run(&state->ap1, ap2_run(&state->ap2, s));
+}
+
+/* doubly complementary 5th-order butterworth filters implemented as the
+   sum (lowpass) and difference (highpass) of two allpass sections */
+static void cap5_init(struct cap5_state *state, double fs, double fc)
 {
 	int i;
-	for (i = 0; i < 2; ++i) {
-		biquad_init_using_type(&b->lp[i], BIQUAD_LOWPASS, fs, f0, 0.7071, 0, 0, BIQUAD_WIDTH_Q);
-		biquad_init_using_type(&b->hp[i], BIQUAD_HIGHPASS, fs, f0, 0.7071, 0, 0, BIQUAD_WIDTH_Q);
+	double theta;
+	double fc_w = fs/M_PI * tan(M_PI*fc/fs);  /* pre-warped corner frequency */
+	double complex p[3];  /* first two have a complex conjugate (not stored), third is real */
+
+	for (i = 0; i < 3; ++i) {
+		theta = (2.0*(i+1)-1.0)*M_PI/10.0;
+		p[i] = -sin(theta) + cos(theta)*I;  /* normalized pole in s-plane */
+		p[i] = p[i]*2.0*M_PI*fc_w;          /* scale */
+		p[i] = (1.0 + p[i]/(2.0*fs)) / (1.0 - p[i]/(2.0*fs));  /* bilinear transform */
+		//LOG_FMT(LL_NORMAL, "fc=%gHz: p[%d] = %f%+fi", fc, i, creal(p[i]), cimag(p[i]));
 	}
+
+	state->a2.ap2.c0 = -2.0*creal(p[0]);
+	state->a2.ap2.c1 = pow(creal(p[0]), 2.0) + pow(cimag(p[0]), 2.0);
+
+	state->a1.c0 = -2.0*creal(p[1]);
+	state->a1.c1 = pow(creal(p[1]), 2.0) + pow(cimag(p[1]), 2.0);
+
+	state->a2.ap1.c0 = -creal(p[2]);
+
+	//LOG_FMT(LL_NORMAL, "fc=%gHz: a1: c0=%g  c1=%g", fc, state->a1.c0, state->a1.c1);
+	//LOG_FMT(LL_NORMAL, "fc=%gHz: a2.ap2: c0=%g  c1=%g", fc, state->a2.ap2.c0, state->a2.ap2.c1);
+	//LOG_FMT(LL_NORMAL, "fc=%gHz: a2.ap1: c0=%g", fc, state->a2.ap1.c0);
+}
+
+static void cap5_run(struct cap5_state *state, sample_t s, sample_t *lp, sample_t *hp)
+{
+	sample_t a1 = ap2_run(&state->a1, s);
+	sample_t a2 = ap3_run(&state->a2, s);
+	*lp = (a1+a2)*0.5;
+	*hp = (a1-a2)*0.5;
 }
 
 static double fb_bands[5]    = { 250.0, 500.0, 1000.0, 2000.0, 4000.0 };
@@ -117,51 +194,28 @@ static void filter_bank_init(struct filter_bank *fb, double fs)
 {
 	int i;
 	for (i = 0; i < 5; ++i)
-		band_div_init(&fb->b[i], fs, fb_bands[i]);
+		cap5_init(&fb->b[i], fs, fb_bands[i]);
 	for (i = 0; i < 6; ++i)
-		biquad_init_using_type(&fb->ap[i], BIQUAD_ALLPASS, fs, fb_bands[fb_ap_bands[i]], 0.7071, 0, 0, BIQUAD_WIDTH_Q);
-}
-
-static sample_t band_div_lp_run(struct band_div *b, sample_t s)
-{
-	return biquad(&b->lp[1], biquad(&b->lp[0], s));
-}
-
-static sample_t band_div_hp_run(struct band_div *b, sample_t s)
-{
-	return biquad(&b->hp[1], biquad(&b->hp[0], s));
+		fb->ap[i] = fb->b[fb_ap_bands[i]].a1;
 }
 
 static void filter_bank_run(struct filter_bank *fb, sample_t s)
 {
-	/* split in the middle (band 2) */
-	fb->s[2] = band_div_lp_run(&fb->b[2], s);
-	fb->s[3] = band_div_hp_run(&fb->b[2], s);
+	cap5_run(&fb->b[2], s, &fb->s[2], &fb->s[3]);  /* split in the middle (band 2) */
+	fb->s[2] = ap2_run(&fb->ap[0], fb->s[2]);      /* band 3 ap */
+	fb->s[2] = ap2_run(&fb->ap[1], fb->s[2]);      /* band 4 ap */
+	fb->s[3] = ap2_run(&fb->ap[2], fb->s[3]);      /* band 1 ap */
+	fb->s[3] = ap2_run(&fb->ap[3], fb->s[3]);      /* band 0 ap */
 
-	fb->s[2] = biquad(&fb->ap[0], fb->s[2]); /* band 3 ap */
-	fb->s[2] = biquad(&fb->ap[1], fb->s[2]); /* band 4 ap */
-	fb->s[3] = biquad(&fb->ap[2], fb->s[3]); /* band 1 ap */
-	fb->s[3] = biquad(&fb->ap[3], fb->s[3]); /* band 0 ap */
+	cap5_run(&fb->b[1], fb->s[2], &fb->s[1], &fb->s[2]);  /* split at band 1 */
+	fb->s[2] = ap2_run(&fb->ap[4], fb->s[2]);             /* band 0 ap */
 
-	/* split at band 1 */
-	fb->s[1] = band_div_lp_run(&fb->b[1], fb->s[2]);
-	fb->s[2] = band_div_hp_run(&fb->b[1], fb->s[2]);
+	cap5_run(&fb->b[3], fb->s[3], &fb->s[3], &fb->s[4]); /* split at band 3 */
+	fb->s[3] = ap2_run(&fb->ap[5], fb->s[3]);            /* band 4 ap */
 
-	fb->s[2] = biquad(&fb->ap[4], fb->s[2]); /* band 0 ap */
+	cap5_run(&fb->b[0], fb->s[1], &fb->s[0], &fb->s[1]); /* split at band 0 */
 
-	/* split at band 3 */
-	fb->s[4] = band_div_hp_run(&fb->b[3], fb->s[3]);
-	fb->s[3] = band_div_lp_run(&fb->b[3], fb->s[3]);
-
-	fb->s[3] = biquad(&fb->ap[5], fb->s[3]); /* band 4 ap */
-
-	/* split at band 0 */
-	fb->s[0] = band_div_lp_run(&fb->b[0], fb->s[1]);
-	fb->s[1] = band_div_hp_run(&fb->b[0], fb->s[1]);
-
-	/* split at band 4 */
-	fb->s[5] = band_div_hp_run(&fb->b[4], fb->s[4]);
-	fb->s[4] = band_div_lp_run(&fb->b[4], fb->s[4]);
+	cap5_run(&fb->b[4], fb->s[4], &fb->s[4], &fb->s[5]); /* split at band 4 */
 }
 
 #define TO_DEGREES(x) ((x)*M_1_PI*180.0)
