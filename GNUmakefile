@@ -11,6 +11,7 @@ DSP_OBJ := dsp.o \
 	gain.o \
 	crossfeed.o \
 	matrix4.o \
+	dolby_atmos_512.o \
 	remix.o \
 	st2ms.o \
 	delay.o \
@@ -28,6 +29,7 @@ LADSPA_DSP_OBJ := ladspa_dsp.o \
 	gain.o \
 	crossfeed.o \
 	matrix4.o \
+	dolby_atmos_512.o \
 	remix.o \
 	st2ms.o \
 	delay.o \
