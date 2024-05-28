@@ -99,22 +99,26 @@ struct effect * gain_effect_init(struct effect_info *ei, struct stream_info *ist
 	else
 		arg = argv[1];
 
-	switch (ei->effect_number) {
-	case GAIN_EFFECT_NUMBER_GAIN:
-		v = pow(10.0, strtod(arg, &endptr) / 20.0);
-		CHECK_ENDPTR(arg, endptr, "gain", return NULL);
-		break;
-	case GAIN_EFFECT_NUMBER_MULT:
-		v = strtod(arg, &endptr);
-		CHECK_ENDPTR(arg, endptr, "multiplier", return NULL);
-		break;
-	case GAIN_EFFECT_NUMBER_ADD:
-		v = strtod(arg, &endptr);
-		CHECK_ENDPTR(arg, endptr, "value", return NULL);
-		break;
-	default:
-		LOG_FMT(LL_ERROR, "%s: BUG: unknown effect: %s (%d)", __FILE__, argv[0], ei->effect_number);
-		return NULL;
+	if (strcmp(arg, "phase_revers") == 0) {
+        	v = -1.0;  // Set the multiplier to -1 for phase reversal
+	} else {
+		switch (ei->effect_number) {
+			case GAIN_EFFECT_NUMBER_GAIN:
+			v = pow(10.0, strtod(arg, &endptr) / 20.0);
+			CHECK_ENDPTR(arg, endptr, "gain", return NULL);
+			break;
+		case GAIN_EFFECT_NUMBER_MULT:
+			v = strtod(arg, &endptr);
+			CHECK_ENDPTR(arg, endptr, "multiplier", return NULL);
+			break;
+			case GAIN_EFFECT_NUMBER_ADD:
+			v = strtod(arg, &endptr);
+			CHECK_ENDPTR(arg, endptr, "value", return NULL);
+			break;
+		default:
+			LOG_FMT(LL_ERROR, "%s: BUG: unknown effect: %s (%d)", __FILE__, argv[0], ei->effect_number);
+			return NULL;
+		}
 	}
 
 	e = calloc(1, sizeof(struct effect));
